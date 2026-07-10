@@ -82,11 +82,24 @@ def import_bee(path: str) -> Optional[str]:
             2: celaut_pb2.Service,
         })
         
-        # Extract the metadata directory and parse the metadata
-        metadata_dir = next(it).dir
-        service_dir = next(it).dir
-        metadata = celaut_pb2.Metadata()
-        metadata.ParseFromString(open(metadata_dir, "rb").read())
+        # Materialize all indexed blocks. A standard bee carries two indices
+        # ([1] Metadata, [2] Service). The remote packer service emits a
+        # single-index bee containing ONLY the Service (no Metadata block),
+        # which previously raised StopIteration here. Handle both shapes.
+        _dirs = list(it)
+        if len(_dirs) >= 2:
+            metadata_dir = next((d.dir for d in _dirs if d.type == celaut_pb2.Metadata), _dirs[0].dir)
+            service_dir = next((d.dir for d in _dirs if d.type == celaut_pb2.Service), _dirs[1].dir)
+            metadata = celaut_pb2.Metadata()
+            metadata.ParseFromString(open(metadata_dir, "rb").read())
+        elif len(_dirs) == 1:
+            # Packer output: service-only stream. Synthesize empty Metadata;
+            # the service hash is computed from content below.
+            service_dir = _dirs[0].dir
+            metadata_dir = None
+            metadata = celaut_pb2.Metadata()
+        else:
+            raise Exception("Empty bee stream: no Service block found to import.")
         
         # Find the configured service hash in metadata first.
         service_hash = None
@@ -126,7 +139,8 @@ def import_bee(path: str) -> Optional[str]:
         metadata_destination = os.path.join(METADATA_REGISTRY, service_hash)
         with open(metadata_destination, "wb") as metadata_file:
             metadata_file.write(metadata.SerializeToString())
-        _remove_path(metadata_dir)
+        if metadata_dir is not None:
+            _remove_path(metadata_dir)
         
         # Move or remove the service file based on whether it's already saved
         if not service_saved:
@@ -139,4 +153,6 @@ def import_bee(path: str) -> Optional[str]:
         return service_hash
     
     except Exception as e:
-        print(f"Error importing service: {e}")
+        import traceback
+        print(f"Error importing service: {e!r}")
+        traceback.print_exc()
