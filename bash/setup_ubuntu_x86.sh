@@ -342,10 +342,12 @@ install_build_dependencies() {
         iputils-ping
         # WSL runtime deps: iproute2 provides `ip` (nodo networking); systemd +
         # systemd-sysv provide `systemctl` so `nodo daemon` and the nodo.service
-        # unit work once the imported distro boots systemd (see /etc/wsl.conf below).
+        # unit work once the imported distro boots systemd (see /etc/wsl.conf below);
+        # bc is a prerequisite of `nodo config` (bash/reconfig.sh).
         iproute2
         systemd
         systemd-sysv
+        bc
         ca-certificates
         curl
         gnupg
