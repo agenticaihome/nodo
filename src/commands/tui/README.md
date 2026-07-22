@@ -46,7 +46,8 @@ example, list values appear as `core_services[1].id` and nested values as
   the expected type.
 - The update is performed with nodo's configured `yq` binary, preserving comments and the
   rest of the file layout.
-- Before every write, the previous file is copied to `config.yaml.tui.bak`.
+- Before every write, the previous file is copied to `config.yaml.tui.bak`. This is a
+  single rolling slot — each save overwrites it, so it only holds one level of undo.
 - Paths containing `mnemonic`, `password`, `secret`, `private_key`, `token`, or `api_key` are
   masked in tables and modal input. Leaving a secret editor blank keeps the existing value;
   enter `""` explicitly to clear it.

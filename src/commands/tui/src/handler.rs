@@ -12,7 +12,11 @@ pub async fn handle_key_events(key: KeyEvent, app: &mut App) -> AppResult<()> {
             (_, KeyCode::Backspace) => {
                 app.input.pop();
             }
-            (_, KeyCode::Char(character)) => app.input.push(character),
+            (modifiers, KeyCode::Char(character))
+                if !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                app.input.push(character)
+            }
             _ => {}
         }
         return Ok(());

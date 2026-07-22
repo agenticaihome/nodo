@@ -3,7 +3,7 @@ use ratatui::widgets::TableState;
 use regex::Regex;
 use rusqlite::{Connection, Result as SqlResult};
 use serde_yaml::Value;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::error;
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom};
@@ -389,6 +389,7 @@ pub struct App {
     last_storage_refresh: Instant,
     last_wallet_refresh: Instant,
     wallet_task: Option<JoinHandle<Result<NodeInfo, String>>>,
+    service_sizes: HashMap<String, u64>,
 }
 
 impl Default for App {
@@ -429,6 +430,7 @@ impl Default for App {
             last_storage_refresh: now.checked_sub(Duration::from_secs(30)).unwrap_or(now),
             last_wallet_refresh: now.checked_sub(WALLET_REFRESH_INTERVAL).unwrap_or(now),
             wallet_task: None,
+            service_sizes: HashMap::new(),
         }
     }
 }
@@ -690,7 +692,11 @@ impl App {
         self.last_data_refresh = Instant::now();
         self.paths = Paths::discover();
 
-        let services = get_services(&self.paths).unwrap_or_default();
+        // Recursive directory sizing (per-service and whole-storage) is expensive,
+        // so both share a 30s cadence instead of running on every 2s data refresh.
+        let refresh_heavy = force || self.last_storage_refresh.elapsed() >= Duration::from_secs(30);
+        let services =
+            get_services(&self.paths, &mut self.service_sizes, refresh_heavy).unwrap_or_default();
         let service_names = services
             .iter()
             .map(|service| (service.id.clone(), service.tag.clone()))
@@ -710,7 +716,7 @@ impl App {
         self.stats.memory_used = self.sys.used_memory();
         self.stats.memory_total = self.sys.total_memory();
         (self.stats.disk_used, self.stats.disk_total) = disk_usage(&self.paths.storage);
-        if force || self.last_storage_refresh.elapsed() >= Duration::from_secs(30) {
+        if refresh_heavy {
             self.stats.storage_bytes = path_size(&self.paths.storage).unwrap_or(0);
             self.last_storage_refresh = Instant::now();
         }
@@ -897,24 +903,42 @@ fn get_instances(
     instances
 }
 
-fn get_services(paths: &Paths) -> Result<Vec<Service>, io::Error> {
+fn get_services(
+    paths: &Paths,
+    sizes: &mut HashMap<String, u64>,
+    recompute: bool,
+) -> Result<Vec<Service>, io::Error> {
     let mut services = Vec::new();
     let entries = match fs::read_dir(&paths.registry) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(services),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            sizes.clear();
+            return Ok(services);
+        }
         Err(error) => return Err(error),
     };
+    let mut present = HashSet::new();
     for entry in entries {
         let entry = entry?;
         let id = entry.file_name().to_string_lossy().into_owned();
         let tag = read_service_tag(&paths.metadata.join(&id)).unwrap_or_else(|| "—".to_string());
-        let size_bytes = path_size(&entry.path()).unwrap_or(0);
+        // Size recursively only on the heavy cadence or the first time a service is seen;
+        // otherwise reuse the cached value so routine refreshes stay cheap.
+        let size_bytes = if recompute || !sizes.contains_key(&id) {
+            let size = path_size(&entry.path()).unwrap_or(0);
+            sizes.insert(id.clone(), size);
+            size
+        } else {
+            sizes.get(&id).copied().unwrap_or(0)
+        };
+        present.insert(id.clone());
         services.push(Service {
             id,
             tag,
             size_bytes,
         });
     }
+    sizes.retain(|id, _| present.contains(id));
     services.sort_by(|left, right| left.tag.cmp(&right.tag).then(left.id.cmp(&right.id)));
     Ok(services)
 }
